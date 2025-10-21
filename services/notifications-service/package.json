@@ -1,0 +1,8 @@
+{
+  "name": "notifications-service",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "dependencies": { "ws": "^8.18.0", "http": "^0.0.1-security" },
+  "scripts": { "start": "node server.js" }
+}

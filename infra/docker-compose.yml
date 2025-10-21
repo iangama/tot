@@ -1,0 +1,134 @@
+name: tot
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    command:
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:${TRAEFIK_WEB_PORT}"
+      - "--entrypoints.websecure.address=:${TRAEFIK_WEBSECURE_PORT}"
+    ports:
+      - "${TRAEFIK_WEB_PORT}:${TRAEFIK_WEB_PORT}"
+      - "${TRAEFIK_WEBSECURE_PORT}:${TRAEFIK_WEBSECURE_PORT}"
+    networks: [appnet]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [appnet]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [appnet]
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ../services/auth-service
+    container_name: auth-service
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET}
+      ACCESS_TOKEN_EXPIRES_IN: ${ACCESS_TOKEN_EXPIRES_IN}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
+      REFRESH_TOKEN_EXPIRES_IN_SEC: ${REFRESH_TOKEN_EXPIRES_IN_SEC}
+      JWT_ISS: ${JWT_ISS}
+      JWT_AUD: ${JWT_AUD}
+      PORT: ${AUTH_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [appnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)"
+      - "traefik.http.routers.auth.entrypoints=web"
+      - "traefik.http.services.auth.loadbalancer.server.port=${AUTH_PORT}"
+    restart: unless-stopped
+
+  catalog-service:
+    build:
+      context: ../services/catalog-service
+    container_name: catalog-service
+    environment:
+      PORT: ${CATALOG_PORT}
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET}
+      JWT_ISS: ${JWT_ISS}
+      JWT_AUD: ${JWT_AUD}
+    networks: [appnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
+      - "traefik.http.routers.catalog.entrypoints=web"
+      - "traefik.http.services.catalog.loadbalancer.server.port=${CATALOG_PORT}"
+    restart: unless-stopped
+
+  orders-service:
+    build:
+      context: ../services/orders-service
+    container_name: orders-service
+    environment:
+      PORT: ${ORDERS_PORT}
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET}
+      JWT_ISS: ${JWT_ISS}
+      JWT_AUD: ${JWT_AUD}
+    networks: [appnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orders.rule=PathPrefix(`/orders`)"
+      - "traefik.http.routers.orders.entrypoints=web"
+      - "traefik.http.services.orders.loadbalancer.server.port=${ORDERS_PORT}"
+    restart: unless-stopped
+
+  notifications-service:
+    build:
+      context: ../services/notifications-service
+    container_name: notifications-service
+    environment:
+      PORT: ${NOTIFS_PORT}
+    networks: [appnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.notifs.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.notifs.entrypoints=web"
+      - "traefik.http.services.notifs.loadbalancer.server.port=${NOTIFS_PORT}"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../apps/web
+    container_name: web
+    environment:
+      VITE_API_BASE: ""
+      PORT: ${WEB_PORT}
+    networks: [appnet]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web.rule=PathPrefix(`/app`)"
+      - "traefik.http.routers.web.entrypoints=web"
+      - "traefik.http.routers.web.middlewares=web-stripprefix"
+      - "traefik.http.middlewares.web-stripprefix.stripprefix.prefixes=/app"
+      - "traefik.http.services.web.loadbalancer.server.port=${WEB_PORT}"
+    restart: unless-stopped
+
+networks:
+  appnet:
+    driver: bridge
